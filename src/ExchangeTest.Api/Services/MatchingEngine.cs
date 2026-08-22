@@ -47,6 +47,9 @@ public sealed class MatchingEngine
         {
             _store.Orders.Add(order);
             Match(order, contract);
+
+            if (order.OrderType == OrderType.Market && IsOpen(order))
+                CancelMarketRemainder(order);
         }
 
         return order;
@@ -63,6 +66,7 @@ public sealed class MatchingEngine
             var pending = _store.Orders
                 .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
                 .Where(IsOpen)
+                .Where(x => x.OrderType == OrderType.Limit)
                 .OrderBy(x => x.CreatedAt)
                 .ThenBy(x => x.Id)
                 .ToList();
@@ -88,7 +92,10 @@ public sealed class MatchingEngine
             if (!IsOpen(order))
                 throw new InvalidOperationException("Only pending or partially filled orders can be cancelled.");
 
-            order.Status = OrderStatus.Cancelled;
+            order.CancelledQuantity += order.RemainingQuantity;
+            order.Status = order.FilledQuantity > 0
+                ? OrderStatus.PartiallyFilledCancelled
+                : OrderStatus.Cancelled;
             order.CompletedAt = DateTimeOffset.UtcNow;
         }
     }
@@ -188,19 +195,26 @@ public sealed class MatchingEngine
     {
         order.FilledQuantity += quantity;
 
-        if (order.FilledQuantity == 0)
-        {
-            order.Status = OrderStatus.Pending;
-            return;
-        }
-
-        if (order.FilledQuantity < order.Quantity)
+        if (order.RemainingQuantity > 0)
         {
             order.Status = OrderStatus.PartiallyFilled;
             return;
         }
 
         order.Status = OrderStatus.Filled;
+        order.CompletedAt = DateTimeOffset.UtcNow;
+    }
+
+    private static void CancelMarketRemainder(Order order)
+    {
+        var remaining = order.RemainingQuantity;
+        if (remaining <= 0)
+            return;
+
+        order.CancelledQuantity += remaining;
+        order.Status = order.FilledQuantity > 0
+            ? OrderStatus.PartiallyFilledCancelled
+            : OrderStatus.Cancelled;
         order.CompletedAt = DateTimeOffset.UtcNow;
     }
 
