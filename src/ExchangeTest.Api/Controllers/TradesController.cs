@@ -34,4 +34,15 @@ public sealed class TradesController : ControllerBase
             .ThenByDescending(x => x.Id)
             .ToList());
     }
+
+    [HttpGet("{tradeId:guid}")]
+    public ActionResult<Trade> GetTrade(Guid tradeId)
+    {
+        var userId = User.GetUserId();
+        var trade = _store.Trades.SingleOrDefault(x =>
+            x.Id == tradeId &&
+            (x.BuyerUserId == userId || x.SellerUserId == userId));
+
+        return trade is null ? NotFound() : Ok(trade);
+    }
 }
