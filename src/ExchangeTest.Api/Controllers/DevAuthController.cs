@@ -15,8 +15,10 @@ public sealed class DevAuthController : ControllerBase
     private static readonly IReadOnlyDictionary<string, Guid> MockUsers =
         new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase)
         {
-            ["user-a"] = Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            ["user-b"] = Guid.Parse("22222222-2222-2222-2222-222222222222")
+            ["A"] = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            ["B"] = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+            ["C"] = Guid.Parse("33333333-3333-3333-3333-333333333333"),
+            ["D"] = Guid.Parse("44444444-4444-4444-4444-444444444444")
         };
 
     private readonly IConfiguration _configuration;
@@ -35,7 +37,7 @@ public sealed class DevAuthController : ControllerBase
             return NotFound();
 
         if (!MockUsers.TryGetValue(userKey, out var userId))
-            return BadRequest(new { message = "Use user-a or user-b." });
+            return BadRequest(new { message = "Use A, B, C or D." });
 
         var issuer = _configuration["Jwt:Issuer"]!;
         var audience = _configuration["Jwt:Audience"]!;
@@ -52,7 +54,7 @@ public sealed class DevAuthController : ControllerBase
             claims:
             [
                 new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
-                new Claim(ClaimTypes.Name, userKey)
+                new Claim(ClaimTypes.Name, userKey.ToUpperInvariant())
             ],
             notBefore: DateTime.UtcNow,
             expires: expiresAt,
@@ -60,7 +62,7 @@ public sealed class DevAuthController : ControllerBase
 
         return Ok(new
         {
-            userKey,
+            user = userKey.ToUpperInvariant(),
             userId,
             accessToken = new JwtSecurityTokenHandler().WriteToken(token),
             expiresAt
