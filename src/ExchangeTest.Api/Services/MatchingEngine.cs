@@ -112,6 +112,7 @@ public sealed class MatchingEngine
 
         var candidates = _store.Orders
             .Where(x => x.Id != incoming.Id)
+            .Where(x => x.UserId != incoming.UserId)
             .Where(x => x.Symbol.Equals(incoming.Symbol, StringComparison.OrdinalIgnoreCase))
             .Where(x => x.Side != incoming.Side)
             .Where(IsOpen)
