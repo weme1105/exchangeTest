@@ -72,4 +72,37 @@ public sealed class MatchingEngineTests
         Assert.Equal(5, limitBuy.RemainingQuantity);
         Assert.Equal(OrderStatus.PartiallyFilled, limitBuy.Status);
     }
+
+    [Fact]
+    public void OppositeOrders_FromSameUser_DoNotSelfTrade()
+    {
+        var store = new InMemoryTradingStore();
+        var market = new MockMarketPriceService();
+        var positions = new PositionService(store);
+        var engine = new MatchingEngine(store, market, positions);
+
+        var sell = engine.PlaceOrder(UserA, new PlaceOrderRequest
+        {
+            Symbol = "TXF202609",
+            Side = OrderSide.Sell,
+            OrderType = OrderType.Limit,
+            Price = 23800m,
+            Quantity = 5
+        });
+
+        var buy = engine.PlaceOrder(UserA, new PlaceOrderRequest
+        {
+            Symbol = "TXF202609",
+            Side = OrderSide.Buy,
+            OrderType = OrderType.Limit,
+            Price = 23800m,
+            Quantity = 5
+        });
+
+        Assert.Empty(store.Trades);
+        Assert.Equal(OrderStatus.Pending, sell.Status);
+        Assert.Equal(OrderStatus.Pending, buy.Status);
+        Assert.Equal(5, sell.RemainingQuantity);
+        Assert.Equal(5, buy.RemainingQuantity);
+    }
 }
