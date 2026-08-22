@@ -46,6 +46,7 @@ public sealed class Order
     public decimal? LimitPrice { get; init; }
     public required int Quantity { get; init; }
     public int FilledQuantity { get; set; }
+    public int RemainingQuantity => Quantity - FilledQuantity;
     public OrderStatus Status { get; set; } = OrderStatus.Pending;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; set; }
@@ -61,6 +62,7 @@ public sealed class Trade
     public required string Symbol { get; init; }
     public required decimal Price { get; init; }
     public required int Quantity { get; init; }
+    public required decimal PointValueAtTrade { get; init; }
     public DateTimeOffset ExecutedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -79,10 +81,12 @@ public sealed class Position
 public sealed class PositionLot
 {
     public Guid Id { get; init; } = Guid.NewGuid();
+    public required Guid OpenTradeId { get; init; }
     public required Guid UserId { get; init; }
     public required string Symbol { get; init; }
     public required PositionSide Side { get; init; }
     public required decimal OpenPrice { get; init; }
+    public required decimal PointValueAtOpen { get; init; }
     public required int OriginalQuantity { get; init; }
     public int RemainingQuantity { get; set; }
     public DateTimeOffset OpenedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -101,4 +105,16 @@ public sealed class FuturesContract
 public sealed class UpdateMockPriceRequest
 {
     public required decimal Price { get; init; }
+}
+
+public sealed class PositionResponse
+{
+    public required Guid Id { get; init; }
+    public required string Symbol { get; init; }
+    public required PositionSide Side { get; init; }
+    public required int Quantity { get; init; }
+    public required decimal AveragePrice { get; init; }
+    public required decimal CurrentPrice { get; init; }
+    public required decimal UnrealizedProfitLoss { get; init; }
+    public required decimal RealizedProfitLoss { get; init; }
 }
