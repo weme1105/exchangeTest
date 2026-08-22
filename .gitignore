@@ -1,0 +1,9 @@
+﻿################################################################################
+# 這個 .gitignore 檔案由 Microsoft(R) Visual Studio 自動建立。
+################################################################################
+
+/.vs
+/src/ExchangeTest.Api/.vs/ExchangeTest.Api.slnx
+/src/ExchangeTest.Api/bin/Debug/net8.0
+/src/ExchangeTest.Api/obj
+/tests/ExchangeTest.Api.Tests/obj
