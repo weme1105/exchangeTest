@@ -66,6 +66,17 @@ public sealed class PlaceOrderResponse
     public required int RemainingQuantity { get; init; }
     public required OrderStatus Status { get; init; }
     public required string Message { get; init; }
+    public PositionRiskWarning? PositionWarning { get; init; }
+}
+
+public sealed class PositionRiskWarning
+{
+    public required PositionSide Side { get; init; }
+    public required int Quantity { get; init; }
+    public required decimal AveragePrice { get; init; }
+    public required decimal CurrentPrice { get; init; }
+    public required decimal UnrealizedProfitLoss { get; init; }
+    public required string Message { get; init; }
 }
 
 public sealed class Trade
