@@ -1,5 +1,6 @@
 using ExchangeTest.Api.Models;
 using ExchangeTest.Api.Services;
+using Xunit;
 
 namespace ExchangeTest.Api.Tests;
 
