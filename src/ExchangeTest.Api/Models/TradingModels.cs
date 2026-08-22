@@ -18,7 +18,8 @@ public enum OrderStatus
     PartiallyFilled = 2,
     Filled = 3,
     Cancelled = 4,
-    Rejected = 5
+    Rejected = 5,
+    PartiallyFilledCancelled = 6
 }
 
 public enum PositionSide
@@ -46,10 +47,25 @@ public sealed class Order
     public decimal? LimitPrice { get; init; }
     public required int Quantity { get; init; }
     public int FilledQuantity { get; set; }
-    public int RemainingQuantity => Quantity - FilledQuantity;
+    public int CancelledQuantity { get; set; }
+    public int RemainingQuantity => Quantity - FilledQuantity - CancelledQuantity;
     public OrderStatus Status { get; set; } = OrderStatus.Pending;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? CompletedAt { get; set; }
+}
+
+public sealed class PlaceOrderResponse
+{
+    public required Guid OrderId { get; init; }
+    public required string Symbol { get; init; }
+    public required OrderSide Side { get; init; }
+    public required OrderType OrderType { get; init; }
+    public required int RequestedQuantity { get; init; }
+    public required int FilledQuantity { get; init; }
+    public required int CancelledQuantity { get; init; }
+    public required int RemainingQuantity { get; init; }
+    public required OrderStatus Status { get; init; }
+    public required string Message { get; init; }
 }
 
 public sealed class Trade
