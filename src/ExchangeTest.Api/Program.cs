@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json.Serialization;
+using ExchangeTest.Api.Middleware;
 using ExchangeTest.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -78,6 +79,8 @@ builder.Services.AddSingleton<PositionService>();
 builder.Services.AddSingleton<MatchingEngine>();
 
 var app = builder.Build();
+
+app.UseMiddleware<ApiExceptionMiddleware>();
 
 app.UseSwagger();
 app.UseSwaggerUI();
