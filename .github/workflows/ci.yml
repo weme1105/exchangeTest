@@ -10,7 +10,7 @@ on:
       - main
 
 jobs:
-  build:
+  build-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,8 +21,14 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Restore
+      - name: Restore API
         run: dotnet restore src/ExchangeTest.Api/ExchangeTest.Api.csproj
 
-      - name: Build
+      - name: Restore tests
+        run: dotnet restore tests/ExchangeTest.Api.Tests/ExchangeTest.Api.Tests.csproj
+
+      - name: Build API
         run: dotnet build src/ExchangeTest.Api/ExchangeTest.Api.csproj --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/ExchangeTest.Api.Tests/ExchangeTest.Api.Tests.csproj --configuration Release --no-restore
