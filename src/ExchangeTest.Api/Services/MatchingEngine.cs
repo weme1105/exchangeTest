@@ -6,26 +6,32 @@ public sealed class MatchingEngine
 {
     private readonly InMemoryTradingStore _store;
     private readonly MockMarketPriceService _market;
+    private readonly PositionService _positionService;
+    private readonly object _syncRoot = new();
 
-    public MatchingEngine(InMemoryTradingStore store, MockMarketPriceService market)
+    public MatchingEngine(
+        InMemoryTradingStore store,
+        MockMarketPriceService market,
+        PositionService positionService)
     {
         _store = store;
         _market = market;
+        _positionService = positionService;
     }
 
     public Order PlaceOrder(Guid userId, PlaceOrderRequest request)
     {
-        if (request.Quantity <= 0)
-            throw new ArgumentOutOfRangeException(nameof(request.Quantity));
+        ValidateRequest(request);
 
-        if (request.OrderType == OrderType.Limit && request.Price is null)
-            throw new ArgumentException("Limit order requires a price.");
-
-        var contract = _store.Contracts.SingleOrDefault(x => x.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase))
+        var contract = _store.Contracts.SingleOrDefault(x =>
+            x.Symbol.Equals(request.Symbol, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException($"Unknown contract: {request.Symbol}");
 
         if (!contract.IsTradable)
             throw new InvalidOperationException("Contract is not tradable.");
+
+        if (request.OrderType == OrderType.Limit && request.Price % contract.TickSize != 0)
+            throw new ArgumentException($"Price must follow tick size {contract.TickSize}.");
 
         var order = new Order
         {
@@ -37,72 +43,206 @@ public sealed class MatchingEngine
             Quantity = request.Quantity
         };
 
-        _store.Orders.Add(order);
-        Match(order);
+        lock (_syncRoot)
+        {
+            _store.Orders.Add(order);
+            Match(order, contract);
+        }
+
         return order;
     }
 
     public void OnMarketPriceChanged(string symbol)
     {
-        var pending = _store.Orders
-            .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
-            .Where(x => x.Status is OrderStatus.Pending or OrderStatus.PartiallyFilled)
-            .OrderBy(x => x.CreatedAt)
-            .ToList();
+        lock (_syncRoot)
+        {
+            var contract = _store.Contracts.SingleOrDefault(x =>
+                x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+                ?? throw new KeyNotFoundException($"Unknown contract: {symbol}");
 
-        foreach (var order in pending)
-            Match(order);
+            var pending = _store.Orders
+                .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+                .Where(IsOpen)
+                .OrderBy(x => x.CreatedAt)
+                .ThenBy(x => x.Id)
+                .ToList();
+
+            foreach (var order in pending)
+            {
+                if (IsOpen(order))
+                    Match(order, contract);
+            }
+        }
     }
 
     public void Cancel(Guid userId, Guid orderId)
     {
-        var order = _store.Orders.SingleOrDefault(x => x.Id == orderId)
-            ?? throw new KeyNotFoundException("Order not found.");
+        lock (_syncRoot)
+        {
+            var order = _store.Orders.SingleOrDefault(x => x.Id == orderId)
+                ?? throw new KeyNotFoundException("Order not found.");
 
-        if (order.UserId != userId)
-            throw new UnauthorizedAccessException();
+            if (order.UserId != userId)
+                throw new UnauthorizedAccessException();
 
-        if (order.Status is not (OrderStatus.Pending or OrderStatus.PartiallyFilled))
-            throw new InvalidOperationException("Only pending or partially filled orders can be cancelled.");
+            if (!IsOpen(order))
+                throw new InvalidOperationException("Only pending or partially filled orders can be cancelled.");
 
-        order.Status = OrderStatus.Cancelled;
-        order.CompletedAt = DateTimeOffset.UtcNow;
+            order.Status = OrderStatus.Cancelled;
+            order.CompletedAt = DateTimeOffset.UtcNow;
+        }
     }
 
-    private void Match(Order incoming)
+    private void Match(Order incoming, FuturesContract contract)
     {
+        if (!IsOpen(incoming))
+            return;
+
         var marketPrice = _market.GetPrice(incoming.Symbol);
 
-        if (incoming.OrderType == OrderType.Market)
+        if (!AcceptsExecutionPrice(incoming, marketPrice))
+            return;
+
+        var candidates = _store.Orders
+            .Where(x => x.Id != incoming.Id)
+            .Where(x => x.Symbol.Equals(incoming.Symbol, StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.Side != incoming.Side)
+            .Where(IsOpen)
+            .Where(x => AcceptsExecutionPrice(x, marketPrice))
+            .ToList();
+
+        candidates = incoming.Side == OrderSide.Buy
+            ? candidates
+                .OrderBy(x => EffectivePriorityPrice(x, decimal.MaxValue))
+                .ThenBy(x => x.CreatedAt)
+                .ThenBy(x => x.Id)
+                .ToList()
+            : candidates
+                .OrderByDescending(x => EffectivePriorityPrice(x, decimal.MinValue))
+                .ThenBy(x => x.CreatedAt)
+                .ThenBy(x => x.Id)
+                .ToList();
+
+        foreach (var resting in candidates)
         {
-            FillAgainstSyntheticLiquidity(incoming, marketPrice, incoming.Quantity - incoming.FilledQuantity);
+            if (incoming.RemainingQuantity == 0)
+                break;
+
+            if (!IsOpen(resting))
+                continue;
+
+            var fillQuantity = Math.Min(incoming.RemainingQuantity, resting.RemainingQuantity);
+            if (fillQuantity <= 0)
+                continue;
+
+            CreateTrade(incoming, resting, marketPrice, fillQuantity, contract);
+            ApplyFill(incoming, fillQuantity);
+            ApplyFill(resting, fillQuantity);
+        }
+    }
+
+    private void CreateTrade(
+        Order incoming,
+        Order resting,
+        decimal executionPrice,
+        int quantity,
+        FuturesContract contract)
+    {
+        var buyOrder = incoming.Side == OrderSide.Buy ? incoming : resting;
+        var sellOrder = incoming.Side == OrderSide.Sell ? incoming : resting;
+
+        var trade = new Trade
+        {
+            BuyOrderId = buyOrder.Id,
+            SellOrderId = sellOrder.Id,
+            BuyerUserId = buyOrder.UserId,
+            SellerUserId = sellOrder.UserId,
+            Symbol = incoming.Symbol,
+            Price = executionPrice,
+            Quantity = quantity,
+            PointValueAtTrade = contract.PointValue
+        };
+
+        _store.Trades.Add(trade);
+
+        _positionService.ApplyTrade(
+            buyOrder.UserId,
+            trade.Symbol,
+            OrderSide.Buy,
+            trade.Price,
+            trade.Quantity,
+            trade.Id,
+            trade.PointValueAtTrade);
+
+        _positionService.ApplyTrade(
+            sellOrder.UserId,
+            trade.Symbol,
+            OrderSide.Sell,
+            trade.Price,
+            trade.Quantity,
+            trade.Id,
+            trade.PointValueAtTrade);
+    }
+
+    private static void ApplyFill(Order order, int quantity)
+    {
+        order.FilledQuantity += quantity;
+
+        if (order.FilledQuantity == 0)
+        {
+            order.Status = OrderStatus.Pending;
             return;
         }
 
-        var canExecute = incoming.Side == OrderSide.Buy
-            ? marketPrice <= incoming.LimitPrice
-            : marketPrice >= incoming.LimitPrice;
-
-        if (!canExecute)
+        if (order.FilledQuantity < order.Quantity)
+        {
+            order.Status = OrderStatus.PartiallyFilled;
             return;
+        }
 
-        var remaining = incoming.Quantity - incoming.FilledQuantity;
-        FillAgainstSyntheticLiquidity(incoming, marketPrice, remaining);
+        order.Status = OrderStatus.Filled;
+        order.CompletedAt = DateTimeOffset.UtcNow;
     }
 
-    private void FillAgainstSyntheticLiquidity(Order order, decimal executionPrice, int quantity)
+    private static bool AcceptsExecutionPrice(Order order, decimal marketPrice)
     {
-        // Prototype rule: current market price provides enough mock liquidity.
-        // Real partial fills are produced when opposite user orders are added in the next iteration.
-        if (quantity <= 0)
-            return;
+        if (order.OrderType == OrderType.Market)
+            return true;
 
-        order.FilledQuantity += quantity;
-        order.Status = order.FilledQuantity == order.Quantity
-            ? OrderStatus.Filled
-            : OrderStatus.PartiallyFilled;
+        if (order.LimitPrice is null)
+            return false;
 
-        if (order.Status == OrderStatus.Filled)
-            order.CompletedAt = DateTimeOffset.UtcNow;
+        return order.Side == OrderSide.Buy
+            ? marketPrice <= order.LimitPrice.Value
+            : marketPrice >= order.LimitPrice.Value;
+    }
+
+    private static decimal EffectivePriorityPrice(Order order, decimal marketOrderPrice)
+        => order.OrderType == OrderType.Market
+            ? marketOrderPrice
+            : order.LimitPrice!.Value;
+
+    private static bool IsOpen(Order order)
+        => order.Status is OrderStatus.Pending or OrderStatus.PartiallyFilled;
+
+    private static void ValidateRequest(PlaceOrderRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Symbol))
+            throw new ArgumentException("Symbol is required.");
+
+        if (request.Quantity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(request.Quantity), "Quantity must be greater than zero.");
+
+        if (request.OrderType == OrderType.Limit)
+        {
+            if (request.Price is null)
+                throw new ArgumentException("Limit order requires a price.");
+
+            if (request.Price <= 0)
+                throw new ArgumentOutOfRangeException(nameof(request.Price), "Price must be greater than zero.");
+        }
+
+        if (request.OrderType == OrderType.Market && request.Price is not null)
+            throw new ArgumentException("Market order must not include a price.");
     }
 }
