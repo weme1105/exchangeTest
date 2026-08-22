@@ -17,14 +17,32 @@ public sealed class OrderBookController : ControllerBase
         _store = store;
     }
 
+    [HttpGet]
+    public IActionResult GetAll()
+    {
+        var books = _store.Orders
+            .Where(IsOpen)
+            .GroupBy(x => x.Symbol, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x.Key)
+            .Select(group => BuildBook(group.Key, group.ToList()))
+            .ToList();
+
+        return Ok(books);
+    }
+
     [HttpGet("{symbol}")]
     public IActionResult Get(string symbol)
     {
         var openOrders = _store.Orders
             .Where(x => x.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase))
-            .Where(x => x.Status is OrderStatus.Pending or OrderStatus.PartiallyFilled)
+            .Where(IsOpen)
             .ToList();
 
+        return Ok(BuildBook(symbol, openOrders));
+    }
+
+    private static object BuildBook(string symbol, IReadOnlyCollection<Order> openOrders)
+    {
         var buys = openOrders
             .Where(x => x.Side == OrderSide.Buy)
             .OrderByDescending(x => x.OrderType == OrderType.Market)
@@ -43,13 +61,16 @@ public sealed class OrderBookController : ControllerBase
             .Select(ToBookOrder)
             .ToList();
 
-        return Ok(new
+        return new
         {
             symbol = symbol.ToUpperInvariant(),
             buys,
             sells
-        });
+        };
     }
+
+    private static bool IsOpen(Order order)
+        => order.Status is OrderStatus.Pending or OrderStatus.PartiallyFilled;
 
     private static object ToBookOrder(Order order) => new
     {
